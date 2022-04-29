@@ -272,13 +272,13 @@ if [ x"$simplify" = x"yes" ]; then
 	printf "\nSimplifying whitelist IP addresses already included in CIDR ranges. These calculations\n"
 	printf "can take a LONG time if you have many mailers selected. Please be patient..."
 	
-	sed '/\./s/\/32//g' "${tmp1}" | sort -u | "${spftoolspath}"/simplify.sh > "${tmp2}" &
+	sed '/\./s/\/32//g' "${tmp1}" | sort -u | /usr/local/bin/route-summarization/aggregateCIDR.pl -q > "${tmp2}" &
 	show_dots "$!"
 
 	if [ x"$enable_blacklist" = x"yes" ] ; then
 		printf "\nSimplifying blacklist IP addresses already included in CIDR ranges. These calculations\n"
 			printf "can take a LONG time if you have many mailers selected. Please be patient..."
-			cat "${blktmp1}" | sort -u | "${spftoolspath}"/simplify.sh > "${blktmp2}" &
+			cat "${blktmp1}" | sort -u | /usr/local/bin/route-summarization/aggregateCIDR.pl -q > "${blktmp2}" &
 			show_dots "$!"
 	fi
 	
@@ -386,7 +386,7 @@ cleanup
 # Reload Postfix to pick up changes in whitelist
 if [ x"$reload_postfix" = x"yes" ]; then
 printf '\nReloading Postfix configuration to refresh rules...\n'
-	${postfixbinarypath}/postfix reload
+	sudo ${postfixbinarypath}/postfix reload
 fi
 
 printf '\nDone!\n'
