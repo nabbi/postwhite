@@ -1,4 +1,4 @@
-[ ![Codeship Status for stevejenkins/postwhite](https://app.codeship.com/projects/8cd4ff10-77b6-0133-22fe-02534086190b/status?branch=master)](https://app.codeship.com/projects/118483) [![Issue Count](https://codeclimate.com/github/stevejenkins/postwhite/badges/issue_count.svg)](https://codeclimate.com/github/stevejenkins/postwhite)
+This is my local fork from stevejenkins/postwhite, layered in a few changes to suite my deploment needs.
 
 # Postwhite - Automatic Postcreen Whitelist & Blacklist Generator
 A script for generating a Postscreen whitelist (and optionally a blacklist) based on large and presumably trustworthy senders' SPF records.
