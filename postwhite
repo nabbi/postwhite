@@ -267,74 +267,30 @@ if [ x"$enable_blacklist" = x"yes" ] ; then
 	done
 fi
 
-# If enabled, simplify (remove) any individual IPs already included in CIDR ranges (disabled by default)
-if [ x"$simplify" = x"yes" ]; then
-	
-	sed '/\./s/\/32//g' "${tmp1}" | sort -u | aggregateCIDR.pl --quiet --spf > "${tmp2}" &
-	show_dots "$!"
+printf "\nCIDR and Host summarization...\n"
+# the depends on https://github.com/nabbi/route-summarization with symlink in system PATH
+# invalid hosts are also screened and removed
+sed '/\./s/\/32//g' "${tmp1}" | sort -u | aggregateCIDR.pl --quiet --spf > "${tmp2}" &
+show_dots "$!"
 
-	if [ x"$enable_blacklist" = x"yes" ] ; then
-			cat "${blktmp1}" | sort -u | aggregateCIDR.pl --quiet --spf > "${blktmp2}" &
-			show_dots "$!"
-	fi
-	
-	printf "\nIP address simplification complete.\n"
-else
-	sed '/\./s/\/32//g' "${tmp1}" > "${tmp2}"
-	if [ x"$enable_blacklist" = x"yes" ] ; then
-		cat "${blktmp1}" > "${blktmp2}"
-	fi
+if [ x"$enable_blacklist" = x"yes" ] ; then
+        cat "${blktmp1}" | sort -u | aggregateCIDR.pl --quiet --spf > "${blktmp2}" &
+        show_dots "$!"
 fi
 
-# Check for invalid IPv4 CIDRs, then format the whitelist
+#Format the lists
+printf "\nFormatting whitelist IPv4 CIDRs...\n"
+cat "${tmp2}" | while read ip; do
+keep_invalid_ip "$ip" "permit"
+done >> "${tmp3}" &
+show_dots "$!"
 
-# If enabled, fix invalid CIDRs
-if [ x"$invalid_ip4" = x"fix" ] ; then
-	printf "\nFixing invalid whitelist IPv4 CIDRs..."
-	cat "${tmp2}" | while read ip; do
-		fix_invalid_ip "$ip" "permit"
-	done >> "${tmp3}" &
+if [ x"$enable_blacklist" = x"yes" ] ; then
+	printf "\nFormatting blacklist IPv4 CIDRs...\n"
+	cat "${blktmp2}" | while read ip; do
+		keep_invalid_ip "$ip" "reject"
+	done >> "${blktmp3}" &
 	show_dots "$!"
-
-	if [ x"$enable_blacklist" = x"yes" ] ; then
-		printf "\nFixing invalid blacklist IPv4 CIDRs..."
-		cat "${blktmp2}" | while read ip; do
-			fix_invalid_ip "$ip" "reject"
-		done >> "${blktmp3}" &
-			show_dots "$!"
-	fi
-
-# If enabled, remove invalid CIDRs
-elif [ x"$invalid_ip4" = x"remove" ] ; then
-	printf "\nRemoving invalid IPv4 CIDRs from whitelist..."
-	cat "${tmp2}" | while read ip; do
-		remove_invalid_ip "$ip" "permit"
-	done >> "${tmp3}" &
-	show_dots "$!"
-
-	if [ x"$enable_blacklist" = x"yes" ] ; then
-		printf "\nRemoving invalid IPv4 CIDRs from blacklist..."
-		cat "${blktmp2}" | while read ip; do
-			remove_invalid_ip "$ip" "reject"
-		done >> "${blktmp3}" &
-		show_dots "$!"
-	fi
-
-# If enabled, keep invalid CIDRs
-elif [ x"$invalid_ip4" = x"keep" ] ; then
-	printf "\nKeeping invalid whitelist IPv4 CIDRs...\n"
-	cat "${tmp2}" | while read ip; do
-		keep_invalid_ip "$ip" "permit"
-	done >> "${tmp3}" &
-	show_dots "$!"
-
-	if [ x"$enable_blacklist" = x"yes" ] ; then
-		printf "\nKeeping invalid blacklist IPv4 CIDRs...\n"
-		cat "${blktmp2}" | while read ip; do
-			keep_invalid_ip "$ip" "reject"
-		done >> "${blktmp3}" &
-		show_dots "$!"
-	fi
 fi
 
 # Sort, uniq, and count final rules
