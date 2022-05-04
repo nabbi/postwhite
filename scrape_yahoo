@@ -9,7 +9,7 @@
 # and Steve Jenkins (https://www.stevejenkins.com/)
 
 version="1.1"
-lastupdated="01 December 2020"
+lastupdated="4 May 2022"
 
 # Verizon, AOL and Yahoo servers have allegedly merged.
 yahoo_url="https://senders.yahooinc.com/outbound-mail-servers"

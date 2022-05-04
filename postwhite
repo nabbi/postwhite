@@ -7,7 +7,7 @@
 ###################################################################
 
 version="3.4"
-lastupdated="14 April 2018"
+lastupdated="4 May 2022"
 
 # Usage: 1) Place entire /postwhite directory in /usr/local/bin
 #	 2) Move postwhite.conf to /etc
