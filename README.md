@@ -25,9 +25,10 @@ Postwhite also assumes that you have **Postfix** and the appropriate **bind-util
 
 # Usage
 1. Make sure you have <a target="_blank" href="https://github.com/jsarenik/spf-tools">SPF-Tools</a> on your system
-2. Move the ```postwhite.conf``` file to your `/etc/` directory
-3. Add any custom hosts in ```postwhite.conf```
-4. Run ```./postwhite``` from the command line.
+2. And <a target=_blank" href="https://github.com/nabbi/route-summarization">route-summarization</a> for aggregating CIDR ranges.
+3. Move the ```postwhite.conf``` file to your `/etc/` directory
+4. Add any custom hosts in ```postwhite.conf```
+5. Run ```./postwhite``` from the command line.
 
 You can optionally provide a configuration file via the command line which will override the default configuration file:
 
