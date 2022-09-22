@@ -1,4 +1,4 @@
-#!/bin/sh
+#! /usr/bin/env bash
 #
 ###################################################################
 # Postwhite - Automatic Postcreen allowlist / denylist Generator #
@@ -59,6 +59,16 @@ reject_line_v6="${reject_line_v4}"
 
 # Abort script on error (FYI: enabling will cause script to exit silently if mailer has no valid results)
 set -e
+
+if [ -f /usr/local/bin/aggregateCIDR.pl ]; then
+    aggregateCIDR='/usr/local/bin/aggregateCIDR.pl'
+elif [ which aggregateCIDR.pl ]; then
+    aggregateCIDR=$(which aggregateCIDR.pl)
+else
+    echo "fatal: unable to locate aggregateCIDR.pl"
+    echo "https://github.com/nabbi/route-summarization"
+    exit 1
+fi
 
 printf "Starting Postwhite v$version ($lastupdated)\n"
 
@@ -270,11 +280,11 @@ fi
 printf "\nCIDR and Host summarization...\n"
 # the depends on https://github.com/nabbi/route-summarization with symlink in system PATH
 # invalid hosts are also screened and removed
-sed '/\./s/\/32//g' "${tmp1}" | sort -u | aggregateCIDR.pl --quiet --spf > "${tmp2}" &
+sed '/\./s/\/32//g' "${tmp1}" | sort -u | ${aggregateCIDR} --quiet --spf > "${tmp2}" &
 show_dots "$!"
 
 if [ x"$enable_denylist" = x"yes" ] ; then
-        cat "${denytmp1}" | sort -u | aggregateCIDR.pl --quiet --spf > "${denytmp2}" &
+        cat "${denytmp1}" | sort -u | ${aggregateCIDR} --quiet --spf > "${denytmp2}" &
         show_dots "$!"
 fi
 
