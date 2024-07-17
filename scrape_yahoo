@@ -21,11 +21,7 @@ yahoo_url="https://senders.yahooinc.com/outbound-mail-servers"
 # Abort script on error
 set -e
 
-if [ -f /usr/local/bin/aggregateCIDR.pl ]; then
-    aggregateCIDR='/usr/local/bin/aggregateCIDR.pl'
-elif [ which aggregateCIDR.pl ]; then
-    aggregateCIDR=$(which aggregateCIDR.pl)
-else
+if ! aggregateCIDR=$(which aggregateCIDR.pl) ; then
     echo "fatal: unable to locate aggregateCIDR.pl"
     echo "https://github.com/nabbi/route-summarization"
     exit 1

@@ -60,21 +60,13 @@ reject_line_v6="${reject_line_v4}"
 # Abort script on error (FYI: enabling will cause script to exit silently if mailer has no valid results)
 set -e
 
-if [ -f /usr/local/bin/aggregateCIDR.pl ]; then
-    aggregateCIDR='/usr/local/bin/aggregateCIDR.pl'
-elif [ which aggregateCIDR.pl ]; then
-    aggregateCIDR=$(which aggregateCIDR.pl)
-else
+if ! aggregateCIDR=$(which aggregateCIDR.pl) ; then
     echo "fatal: unable to locate aggregateCIDR.pl"
     echo "https://github.com/nabbi/route-summarization"
     exit 1
 fi
 
-if [ -f /usr/sbin/postmap ]; then
-    postmap='/usr/sbin/postmap'
-elif [ which postmap ]; then
-    postmap=$(which postmap)
-else
+if ! postmap=$(which postmap) ; then
 	echo "fatal: unable to locate postmap"
 	exit 1
 fi
