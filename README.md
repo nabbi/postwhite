@@ -105,10 +105,6 @@ The ```yahoo_static_hosts.txt``` file can be periodically updated by running the
 
 To enable denylisting, set ```enable_denylist=yes``` and then list denylisted hosts in ```denylist_hosts```. Please refer to the denylisting warning above. denylisting is not the primary purpose of Postwhite, and most users will never need to turn it on.
 
-## Simplify
-
-By default, the option to simplify (remove) invididual IP addresses that are already included in CIDR ranges (handled by the SPT-Tools ```simplify.sh``` script) is set to **no**. Turning this feature on when building a allowlist for more than just a few mailers *dramatically* adds to the processing time required to run Postwhite. Feel free to turn it on to see how it affects the amount of time required to build your allowlist, but if you're allowlisting more than just 3 or 4 mailers, you'll probably want to turn it to "no" again. Having a handful of individual IP addresses in your allowlist that might be redundantly covered by CIDR ranges won't have any appreciable impact on Postscreen's performance.
-
 ## Invalid hosts
 
 You can also choose how to handle malformed or invalid CIDR ranges that appear in the mailers' SPF records (which happens more often than it should). The options are:
