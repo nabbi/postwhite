@@ -1,0 +1,5 @@
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin
+
+4 7  * * 0      /usr/local/bin/postwhite/scrape_yahoo /etc/postwhite/postwhite.conf > ~/postwhite-yahoo.log 2>&1
+4 15 * * *      /usr/local/bin/postwhite.sh /etc/postwhite/postwhite.conf > ~/postwhite.log 2>&1
+

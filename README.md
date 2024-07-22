@@ -41,7 +41,7 @@ You can optionally provide a configuration file via the command line which will 
 
     ./postwhite /path/to/config-file
 
-I recommend cloning both the SPF-Tools and the Postwhite repos into your ```/usr/local/bin/``` directory. Once you're satisfied with its performance, set a daily cron job to pick up any new hosts in the mailers' SPF records like this:
+I recommend cloning both the SPF-Tools and the Postwhite repos into your ```/usr/local/bin/``` directory. Once you're satisfied with its performance, set a daily [cron](cronttab) job to pick up any new hosts in the mailers' SPF records like this:
 
     @daily /usr/local/bin/postwhite/postwhite > /dev/null 2>&1 #Update Postscreen allowlists
 
