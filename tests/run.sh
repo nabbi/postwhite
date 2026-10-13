@@ -336,11 +336,14 @@ scrape_with() {
 	cat > "$sb/bin/curl" <<-'EOF'
 	#!/usr/bin/env bash
 	echo '<td>192.0.2.0/25</td><td>192.0.2.128/25</td><td>198.51.100.0/24</td>'
+	# hosts listed without a prefix
+	echo '<td>203.0.113.8</td><td>203.0.113.9</td><td>203.0.113.20</td>'
 	EOF
 	chmod +x "$sb/bin/curl"
 	run_script scrape_yahoo "$sb/postwhite.conf"
 	assert_status 0
-	[ "$(cat "$sb/yahoo.txt")" = "$(printf 'ip4:192.0.2.0/24\nip4:198.51.100.0/24')" ] ||
+	[ "$(cat "$sb/yahoo.txt")" = "$(printf 'ip4:%s\n' 192.0.2.0/24 198.51.100.0/24 \
+		203.0.113.8/31 203.0.113.20)" ] ||
 		fail "yahoo list: $(cat "$sb/yahoo.txt")"
 }
 
