@@ -339,6 +339,40 @@ scrape_yahoo_summarizer_failure() {
 }
 test_case scrape_yahoo_summarizer_failure
 
+# fake_curl <page>: serve <page> as every download
+fake_curl() {
+	printf '#!/usr/bin/env bash\necho %q\n' "$1" > "$sb/bin/curl"
+	chmod +x "$sb/bin/curl"
+}
+
+# addresses outside the table, such as in scripts, are not mailers
+scrape_yahoo_reads_table_cells() {
+	needs rust
+	[ -n "$skip_reason" ] && return
+	sandbox
+	use aggregate-cidr "$rust"
+	fake_curl '<script>var n="203.0.113.0/24";</script><table><tr><td class="ip">192.0.2.0/24</td></tr></table>'
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 0
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.0/24 ] ||
+		fail "yahoo list: $(cat "$sb/yahoo.txt")"
+}
+test_case scrape_yahoo_reads_table_cells
+
+# a page with no addresses, such as after a redesign, must not empty the list
+scrape_yahoo_nothing_found() {
+	sandbox
+	printf '#!/usr/bin/env bash\ncat\n' > "$sb/bin/aggregate-cidr"
+	chmod +x "$sb/bin/aggregate-cidr"
+	fake_curl '<p>Moved to 192.0.2.0/24</p>'
+	echo 'ip4:192.0.2.1' > "$sb/yahoo.txt"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 1
+	assert_output "fatal: no IPv4 addresses found at"
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.1 ] || fail "yahoo list changed"
+}
+test_case scrape_yahoo_nothing_found
+
 scrape_yahoo_no_summarizer() {
 	sandbox
 	echo 'ip4:192.0.2.1' > "$sb/yahoo.txt"
