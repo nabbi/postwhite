@@ -532,6 +532,20 @@ scrape_yahoo_nothing_found() {
 }
 test_case scrape_yahoo_nothing_found
 
+# IPv6 networks keep their prefix length and use SPF's ip6: mechanism
+scrape_yahoo_ipv6() {
+	needs rust
+	[ -n "$skip_reason" ] && return
+	sandbox
+	use aggregate-cidr "$rust"
+	fake_curl '<td>192.0.2.0/24</td><td>2001:db8::/33</td><td>2001:db8:8000::/33</td><td>2001:db8:1::1</td>'
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 0
+	[ "$(cat "$sb/yahoo.txt")" = "$(printf '%s\n' ip4:192.0.2.0/24 ip6:2001:db8::/32)" ] ||
+		fail "yahoo list: $(cat "$sb/yahoo.txt")"
+}
+test_case scrape_yahoo_ipv6
+
 scrape_yahoo_config_with_space() {
 	needs rust
 	[ -n "$skip_reason" ] && return
