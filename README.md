@@ -32,7 +32,7 @@ Postwhite also assumes that you have **Postfix** and the appropriate **bind-util
 # Usage
 
 1. Make sure you have <a target="_blank" href="https://github.com/jsarenik/spf-tools">SPF-Tools</a> on your system
-2. And <a target="_blank" href="https://github.com/nabbi/route-summarization">route-summarization</a> for aggregating CIDR ranges.
+2. And a CIDR summarizer on your `PATH` (see [CIDR summarization](#cidr-summarization)): `aggregate-cidr` from <a target="_blank" href="https://github.com/nabbi/route-summarization-rs">route-summarization-rs</a>, or `aggregateCIDR.pl` from <a target="_blank" href="https://github.com/nabbi/route-summarization">route-summarization</a>.
 3. Move the ```postwhite.conf``` file to your `/etc/` directory
 4. Add any custom hosts in ```postwhite.conf```
 5. Run ```./postwhite``` from the command line.
@@ -101,6 +101,17 @@ A list of Yahoo! outbound IP addresses, based on the linked knowledgebase articl
 
 The ```yahoo_static_hosts.txt``` file can be periodically updated by running the ```scrape_yahoo``` script, which requires either **Wget** or **cURL** (included on most systems). The ```scrape_yahoo``` script reads the Postwhite config file for the location to write the updated list of Yahoo! oubound IP addresses. Run the ```scrape_yahoo``` script periodically via cron (I recommend no more than weekly) to automatically update the list of Yahoo! IPs used by Postwhite.
 
+## CIDR summarization
+
+The collected SPF entries are summarized into the fewest CIDR ranges by the first tool found on `PATH`:
+
+1. `aggregate-cidr` from [route-summarization-rs](https://github.com/nabbi/route-summarization-rs)
+2. `aggregateCIDR.pl` from [route-summarization](https://github.com/nabbi/route-summarization) (Perl)
+
+`postwhite` and `scrape_yahoo` exit with an error if neither is found. `postwhite` prints which one it used. Both give the same allowlist from the bundled Yahoo! list; the one difference to expect is that `aggregate-cidr` writes IPv6 hosts without `/128`, which Postfix accepts.
+
+If the summarizer fails, `postwhite` exits before writing anything, so the current allowlist and denylist stay in place.
+
 ## denylisting
 
 To enable denylisting, set ```enable_denylist=yes``` and then list denylisted hosts in ```denylist_hosts```. Please refer to the denylisting warning above. denylisting is not the primary purpose of Postwhite, and most users will never need to turn it on.
@@ -114,6 +125,16 @@ You can also choose how to handle malformed or invalid CIDR ranges that appear i
 * **fix** - this option will change the invalid CIDR to the closest valid range (the same one suggested by Postfix, in fact) and include the corrected CIDR range in the allowlist.
 
 Other options in ```postwhite.conf``` include changing the filenames for your allowlist & denylist, Postfix path, SPF-Tools path, and whether or not to automatically reload Postfix after you've generated a new list.
+
+# Testing
+
+```shell
+tests/run.sh
+```
+
+No spf-tools, Postfix or network access is needed: fake `despf.sh`, `postmap` and `curl` commands stand in for them, and each test runs in a scratch directory under `tests/.work`.
+
+Tests that need a summarizer run when `aggregate-cidr`, or `aggregateCIDR.pl` with perl and Net::CIDR::Lite, are on `PATH`, and are skipped otherwise. Point at other copies with `AGGREGATE_CIDR=/path` or `PERL_AGGREGATE=/path`; set `REQUIRE_TOOLS=1` (as CI does) to fail instead of skipping. Pass a glob to run some tests: `tests/run.sh 'scrape*'`.
 
 # Credits
 
