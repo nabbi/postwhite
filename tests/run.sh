@@ -214,6 +214,18 @@ no_summarizer_is_fatal() {
 }
 test_case no_summarizer_is_fatal
 
+# --- config file
+
+missing_config_with_space() {
+	sandbox
+	printf '#!/usr/bin/env bash\ncat\n' > "$sb/bin/aggregate-cidr"
+	chmod +x "$sb/bin/aggregate-cidr"
+	run_script postwhite "$sb/my conf/postwhite.conf"
+	assert_status 1
+	assert_output "Can't find $sb/my conf/postwhite.conf"
+}
+test_case missing_config_with_space
+
 # --- allowlist and denylist, with each summarizer
 
 allowlist_with() {
@@ -396,6 +408,21 @@ scrape_yahoo_nothing_found() {
 	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.1 ] || fail "yahoo list changed"
 }
 test_case scrape_yahoo_nothing_found
+
+scrape_yahoo_config_with_space() {
+	needs rust
+	[ -n "$skip_reason" ] && return
+	sandbox
+	use aggregate-cidr "$rust"
+	fake_curl '<td>192.0.2.0/24</td>'
+	mkdir "$sb/my conf"
+	mv "$sb/postwhite.conf" "$sb/my conf/"
+	run_script scrape_yahoo "$sb/my conf/postwhite.conf"
+	assert_status 0
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.0/24 ] ||
+		fail "yahoo list: $(cat "$sb/yahoo.txt" 2>&1)"
+}
+test_case scrape_yahoo_config_with_space
 
 scrape_yahoo_no_downloader() {
 	sandbox

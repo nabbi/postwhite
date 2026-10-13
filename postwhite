@@ -83,7 +83,7 @@ if [ -n "$1" ]; then
 fi
 
 # Read config file options
-if [ ! -s $config_file ] ; then
+if [ ! -s "$config_file" ] ; then
 	printf "%s: Can't find %s. Exiting.\n" "$0" "$config_file" 1>&2
 	exit 1
 fi

@@ -40,7 +40,7 @@ else
 fi
 
 # Read config file options   
-if [ -s $config_file ] ; then
+if [ -s "$config_file" ] ; then
         printf "\nReading options from %s...\n" "$config_file"
         . "${config_file}"
 else
