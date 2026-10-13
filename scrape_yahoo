@@ -52,7 +52,7 @@ fi
 if [ `command -v wget` ]
 then
         content=$(wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0" $yahoo_url -q -O -)
-elif [ -n `command -v curl` ]
+elif [ -n "$(command -v curl)" ]
 then
         content=$(curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0" -s -L $yahoo_url)
 else

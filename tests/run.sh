@@ -373,6 +373,18 @@ scrape_yahoo_nothing_found() {
 }
 test_case scrape_yahoo_nothing_found
 
+scrape_yahoo_no_downloader() {
+	sandbox
+	printf '#!/usr/bin/env bash\ncat\n' > "$sb/bin/aggregate-cidr"
+	chmod +x "$sb/bin/aggregate-cidr"
+	echo 'ip4:192.0.2.1' > "$sb/yahoo.txt"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 1
+	assert_output "wget or curl required."
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.1 ] || fail "yahoo list changed"
+}
+test_case scrape_yahoo_no_downloader
+
 scrape_yahoo_no_summarizer() {
 	sandbox
 	echo 'ip4:192.0.2.1' > "$sb/yahoo.txt"
