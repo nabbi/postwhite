@@ -33,7 +33,7 @@ mkdir -p "$scratch"
 trap 'rm -rf "$scratch"' EXIT
 
 utils="bash env which mktemp basename dirname cut expr grep sed sort sleep \
-	cat uniq wc date rm perl tr head"
+	cat uniq wc date rm perl tr head find mv chmod id"
 
 # sandbox [name]: create $sb with bin/, spf/, hosts/, out/ and tmp/, named
 # after the calling test by default
@@ -273,6 +273,126 @@ denylist_rust() {
 }
 test_case denylist_rust
 
+# --- hardening
+
+# passthrough: a summarizer that accepts every entry, so postwhite's own
+# checks are what stand between DNS and the tables
+passthrough() {
+	printf '#!/usr/bin/env bash\ncat\n' > "$sb/bin/aggregate-cidr"
+	chmod +x "$sb/bin/aggregate-cidr"
+}
+
+config_is_not_code() {
+	sandbox
+	passthrough
+	mailers
+	# shellcheck disable=SC2016 # expansions are for postwhite, not us
+	conf 'custom_hosts="$(touch pwned) example.org"'
+	conf 'aggregateCIDR=false'
+	conf 'permit_line_v4=%s\tOK\n'
+	run_postwhite
+	assert_status 0
+	[ ! -e "$sb/pwned" ] || fail "config ran a command"
+	assert_output "ignoring unknown setting aggregateCIDR"
+	# shellcheck disable=SC2016
+	assert_output 'Skipping invalid host name: $(touch'
+	grep -q 'permit$' "$sb/out/allow.cidr" || fail "config replaced the rule format"
+}
+test_case config_is_not_code
+
+world_writable_config_refused() {
+	sandbox
+	passthrough
+	chmod o+w "$sb/postwhite.conf"
+	run_postwhite
+	assert_status 1
+	assert_output "is world-writable"
+	[ ! -e "$sb/out/allow.cidr" ] || fail "allowlist written"
+}
+test_case world_writable_config_refused
+
+table_name_stays_in_postfixpath() {
+	sandbox
+	passthrough
+	conf 'allowlist=../escaped.cidr'
+	run_postwhite
+	assert_status 1
+	assert_output "allowlist must be a file name"
+	[ ! -e "$sb/escaped.cidr" ] || fail "table written outside postfixpath"
+}
+test_case table_name_stays_in_postfixpath
+
+# despf.sh must never see a host name it could take for an option
+host_names_checked() {
+	sandbox
+	passthrough
+	mailers
+	cat > "$sb/spf/despf.sh" <<-'EOF'
+	#!/usr/bin/env bash
+	echo "$1" >> "$(dirname "$0")/../despf.log"
+	cat "$(dirname "$0")/../hosts/$1" 2>/dev/null || true
+	EOF
+	conf 'custom_hosts="-x example.org"'
+	run_postwhite
+	assert_status 0
+	assert_output "Skipping invalid host name: -x"
+	! grep -qx -- -x "$sb/despf.log" || fail "despf.sh ran with -x"
+	grep -qx example.org "$sb/despf.log" || fail "example.org not queried"
+}
+test_case host_names_checked
+
+# entries from DNS or the Yahoo! list can't add fields or rules to a table
+entries_are_addresses_only() {
+	sandbox
+	passthrough
+	printf '%s\n' 'ip4:192.0.2.1	reject' 'ip4:192.0.2.2,198.51.100.1' \
+		ip4:192.0.2.3 > "$sb/hosts/google.com"
+	printf 'ip4:203.0.113.1\nnot-an-entry\n' > "$sb/yahoo.txt"
+	conf 'include_yahoo="yes"'
+	run_postwhite
+	assert_status 0
+	assert_rules "$sb/out/allow.cidr" "$(printf '%s\tpermit\n' 192.0.2.3 203.0.113.1)"
+}
+test_case entries_are_addresses_only
+
+# a symlink planted at a table's name is replaced, never written through
+table_symlink_not_followed() {
+	sandbox
+	passthrough
+	mailers
+	echo precious > "$sb/victim"
+	ln -s "$sb/victim" "$sb/out/allow.cidr"
+	run_postwhite
+	assert_status 0
+	[ "$(cat "$sb/victim")" = precious ] || fail "wrote through the symlink"
+	[ -f "$sb/out/allow.cidr" ] && [ ! -L "$sb/out/allow.cidr" ] ||
+		fail "allowlist is not a regular file"
+	[ -n "$(find "$sb/out/allow.cidr" -perm 0644)" ] ||
+		fail "allowlist mode: $(ls -l "$sb/out/allow.cidr")"
+	[ -z "$(find "$sb/out" -name '.allow.cidr.*')" ] || fail "temp table left"
+}
+test_case table_symlink_not_followed
+
+# cron can't answer a password prompt, so sudo must not ask for one
+reload_without_prompting() {
+	sandbox
+	passthrough
+	mailers
+	printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/sudo.log"\n' "$sb" > "$sb/bin/sudo"
+	printf '#!/usr/bin/env bash\necho "$@" >> "%s/postfix.log"\n' "$sb" > "$sb/bin/postfix"
+	chmod +x "$sb/bin/sudo" "$sb/bin/postfix"
+	conf 'reload_postfix=yes'
+	run_postwhite
+	assert_status 0
+	if [ "$(id -u)" -eq 0 ]; then
+		[ "$(cat "$sb/postfix.log")" = reload ] || fail "postfix not reloaded"
+	else
+		[ "$(cat "$sb/sudo.log")" = "-n $sb/bin/postfix reload" ] ||
+			fail "sudo ran with: $(cat "$sb/sudo.log")"
+	fi
+}
+test_case reload_without_prompting
+
 # both summarizers give the same tables from the bundled Yahoo! list
 yahoo_parity() {
 	needs rust perl_tool
@@ -448,6 +568,7 @@ scrape_yahoo_no_summarizer() {
 	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.1 ] || fail "yahoo list changed"
 }
 test_case scrape_yahoo_no_summarizer
+
 
 echo
 echo "$passed passed, $failed failed, $skipped skipped"

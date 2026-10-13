@@ -63,6 +63,14 @@ reject_line_v6="${reject_line_v4}"
 # Abort script on error (FYI: enabling will cause script to exit silently if mailer has no valid results)
 set -e
 
+# Postfix must be able to read the tables; temp files stay private (mktemp)
+umask 022
+
+fatal() {
+	>&2 printf "fatal: %s\n" "$*"
+	exit 1
+}
+
 # summarize with the first tool found in the system path:
 #   aggregate-cidr     https://github.com/nabbi/route-summarization-rs
 #   aggregateCIDR.pl   https://github.com/nabbi/route-summarization
@@ -90,8 +98,61 @@ if [ ! -s "$config_file" ] ; then
 	printf "%s: Can't find %s. Exiting.\n" "$0" "$config_file" 1>&2
 	exit 1
 fi
+if [ -n "$(find -L "$config_file" -prune -perm -0002 2>/dev/null)" ]; then
+	fatal "$config_file is world-writable"
+fi
 printf "\nReading options from %s...\n" "$config_file"
-. "${config_file}"
+
+# Read key=value settings rather than sourcing the file, so the config can't
+# run commands or replace the script's own variables. Settings start empty so
+# none leak in from the environment.
+config_keys="spftoolspath postfixpath postfixbinarypath allowlist denylist \
+	yahoo_static_hosts custom_hosts include_yahoo enable_denylist \
+	denylist_hosts reload_postfix"
+for k in $config_keys; do
+	eval "$k="
+done
+while IFS= read -r line || [ -n "$line" ]; do
+	# trim surrounding whitespace
+	line="${line#"${line%%[![:space:]]*}"}"
+	line="${line%"${line##*[![:space:]]}"}"
+	case $line in
+		''|'#'*) continue ;;
+		*=*) ;;
+		*) fatal "$config_file: not a setting: $line" ;;
+	esac
+	key="${line%%=*}"
+	value="${line#*=}"
+	# drop one pair of surrounding quotes
+	case $value in
+		\"*\") value="${value#\"}"; value="${value%\"}" ;;
+		\'*\') value="${value#\'}"; value="${value%\'}" ;;
+	esac
+	known=
+	for k in $config_keys; do
+		if [ "$key" = "$k" ]; then
+			known=yes
+			eval "$k=\$value"
+		fi
+	done
+	if [ -z "$known" ]; then
+		>&2 printf "%s: ignoring unknown setting %s\n" "$config_file" "$key"
+	fi
+done < "$config_file"
+
+# tables are written into postfixpath, so their names must not leave it
+for t in allowlist denylist; do
+	eval "v=\$$t"
+	case $v in
+		''|.|..|*/*) fatal "$t must be a file name, not '$v'" ;;
+	esac
+done
+if [ ! -d "$postfixpath" ]; then
+	fatal "postfixpath $postfixpath is not a directory"
+fi
+if [ ! -x "${spftoolspath}/despf.sh" ]; then
+	fatal "can't run ${spftoolspath}/despf.sh"
+fi
 
 # Create temporary files
 printf "\nCreating temporary files...\n"
@@ -112,6 +173,9 @@ cleanup() {
 			fi
 		done
 	done
+	if [ -n "${newtable:-}" ]; then
+		rm -f "$newtable"
+	fi
 }
 trap cleanup EXIT
 
@@ -122,7 +186,7 @@ for p in $tmpPrefix; do
 			>&2 printf "%s: Can't create temp files, exiting...\n" "$0"
 			exit 1
 		fi
-		eval ${p}${i}="$t"
+		eval "${p}${i}=\$t"
 	done
 done
 
@@ -182,12 +246,23 @@ normalize_ip() {
 	printf "%s" "$normalize_ip_IP"
 }
 
+# Skip host names despf.sh could take for an option or that aren't names
+valid_host() {
+	case $1 in
+		''|-*|*[!A-Za-z0-9._-]*)
+			>&2 printf "Skipping invalid host name: %s\n" "$1"
+			return 1 ;;
+	esac
+}
+
 # Create host query function
 query_host() {
+	valid_host "$1" || return 0
 	"${spftoolspath}"/despf.sh "$1" | (grep -Ei ^ip || true ) >> "${tmp1}"
 }
 
 query_deny_host() {
+	valid_host "$1" || return 0
 	"${spftoolspath}"/despf.sh "$1" | (grep -Ei ^ip || true ) >> "${denytmp1}"
 }
 
@@ -231,6 +306,10 @@ remove_invalid_ip() {
 keep_invalid_ip() {
 	keep_invalid_ip_iptype="$( echo "$1" | cut -d\: -f1 )"
 	keep_invalid_ip_ip="$( echo "$1" | cut -d\: -f2- )"
+	# entries come from DNS: never let one add fields or lines to the table
+	case $keep_invalid_ip_ip in
+		''|*[!0-9A-Fa-f.:/]*) return 0 ;;
+	esac
 	if [ -n "$keep_invalid_ip_ip" ]; then
 		if [ x"$keep_invalid_ip_iptype" = x"ip4" ]; then
 			printf "$(eval printf "%s" "\${${2}_line_v4}")" "$keep_invalid_ip_ip"
@@ -285,7 +364,10 @@ done
 if [ x"$include_yahoo" = x"yes" ] ; then
 	printf "\nIncluding scraped Yahoo! outbound hosts...\n"
 
-	cat "${yahoo_static_hosts}" >> "${tmp1}"
+	if [ ! -r "$yahoo_static_hosts" ]; then
+		fatal "can't read $yahoo_static_hosts"
+	fi
+	(grep -Ei ^ip "${yahoo_static_hosts}" || true) >> "${tmp1}"
 fi
 
 if [ x"$enable_denylist" = x"yes" ] ; then
@@ -317,14 +399,14 @@ fi
 
 #Format the lists
 printf "\nFormatting allowlist IPv4 CIDRs...\n"
-cat "${tmp2}" | while read ip; do
+cat "${tmp2}" | while read -r ip; do
 keep_invalid_ip "$ip" "permit"
 done >> "${tmp3}" &
 show_dots "$!"
 
 if [ x"$enable_denylist" = x"yes" ] ; then
 	printf "\nFormatting denylist IPv4 CIDRs...\n"
-	cat "${denytmp2}" | while read ip; do
+	cat "${denytmp2}" | while read -r ip; do
 		keep_invalid_ip "$ip" "reject"
 	done >> "${denytmp3}" &
 	show_dots "$!"
@@ -344,23 +426,41 @@ if [ x"$enable_denylist" = x"yes" ] ; then
 	numdenyrules="$(cat "${denytmp5}" | wc -l)"
 fi
 
+# write_table <kind> <name> <rules file> <count>: replace a table in
+# postfixpath by renaming a complete copy over it, so Postfix never reads a
+# partial table and a symlink planted at its name is replaced, not followed
+write_table() {
+	table="${postfixpath}/$2"
+	printf "\nWriting %s %s rules to %s...\n" "$4" "$1" "$table"
+	if [ -d "$table" ]; then
+		fatal "$table is a directory"
+	fi
+	newtable="$(mktemp "${postfixpath}/.$2.XXXXXX")"
+	printf "# %s generated by Postwhite v%s on %s\n# https://github.com/stevejenkins/postwhite/\n# %s total rules\n" \
+		"$1" "$version" "$(date)" "$4" > "$newtable"
+	cat "$3" >> "$newtable"
+	chmod 644 "$newtable"
+	mv -f "$newtable" "$table"
+	newtable=
+	${postmap} "$table"
+}
+
 # Write allowlist and denylist to Postfix directory
-printf "\nWriting $numrules allowlist rules to ${postfixpath}/${allowlist}...\n"
-printf "# allowlist generated by Postwhite v$version on $(date)\n# https://github.com/stevejenkins/postwhite/\n# $numrules total rules\n" > "${postfixpath}"/"${allowlist}"
-cat "${tmp5}" >> "${postfixpath}"/"${allowlist}"
-${postmap} "${postfixpath}"/"${allowlist}"
+write_table allowlist "${allowlist}" "${tmp5}" "$numrules"
 
 if [ x"$enable_denylist" = x"yes" ] ; then
-	printf "\nWriting $numdenyrules denylist rules to ${postfixpath}/${denylist}...\n"
-	printf "# denylist generated by Postwhite v$version on $(date)\n# https://github.com/stevejenkins/postwhite/\n# $numdenyrules total rules\n" > "${postfixpath}"/"${denylist}"
-	cat "${denytmp5}" >> "${postfixpath}"/"${denylist}"
-	${postmap} "${postfixpath}"/"${denylist}"
+	write_table denylist "${denylist}" "${denytmp5}" "$numdenyrules"
 fi
 
 # Reload Postfix to pick up changes in allowlist
 if [ x"$reload_postfix" = x"yes" ]; then
-printf '\nReloading Postfix configuration to refresh rules...\n'
-	sudo ${postfixbinarypath}/postfix reload
+	printf '\nReloading Postfix configuration to refresh rules...\n'
+	if [ "$(id -u)" -eq 0 ]; then
+		"${postfixbinarypath}"/postfix reload
+	else
+		# -n: fail rather than wait under cron for a password (see SUDO.md)
+		sudo -n "${postfixbinarypath}"/postfix reload
+	fi
 fi
 
 printf '\nDone!\n'
