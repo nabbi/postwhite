@@ -1,0 +1,354 @@
+#!/usr/bin/env bash
+#
+# Test postwhite and scrape_yahoo without spf-tools, Postfix or network access.
+#
+# Each test runs the script in a scratch directory whose bin/ holds only the
+# system utilities the scripts need, fake despf.sh, postmap and curl commands,
+# and whichever summarizers the test asks for.
+#
+#   AGGREGATE_CIDR=/path   aggregate-cidr to test (default: found on PATH)
+#   PERL_AGGREGATE=/path   aggregateCIDR.pl to test (default: found on PATH)
+#   REQUIRE_TOOLS=1        fail, rather than skip, tests needing a missing tool
+#
+# Usage: tests/run.sh [name-pattern]
+
+set -u
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(dirname "$here")
+pattern=${1:-}
+
+rust=${AGGREGATE_CIDR:-$(command -v aggregate-cidr || true)}
+perl_tool=${PERL_AGGREGATE:-$(command -v aggregateCIDR.pl || true)}
+
+passed=0
+failed=0
+skipped=0
+
+# scratch space under the repo rather than /tmp: fake commands must be
+# executable, and /tmp is often mounted noexec
+scratch="$here/.work/$$"
+rm -rf "$scratch"
+mkdir -p "$scratch"
+trap 'rm -rf "$scratch"' EXIT
+
+utils="bash env which mktemp basename dirname cut expr grep sed sort ps sleep \
+	cat uniq wc date rm perl tr head"
+
+# sandbox [name]: create $sb with bin/, spf/, hosts/ and out/, named after
+# the calling test by default
+sandbox() {
+	sb="$scratch/${1:-${FUNCNAME[1]}}"
+	mkdir -p "$sb/bin" "$sb/spf" "$sb/hosts" "$sb/out"
+	for u in $utils; do
+		p=$(command -v "$u") && ln -s "$p" "$sb/bin/$u"
+	done
+
+	cat > "$sb/spf/despf.sh" <<-'EOF'
+	#!/usr/bin/env bash
+	# print the SPF entries recorded for host $1
+	cat "$(dirname "$0")/../hosts/$1" 2>/dev/null || true
+	EOF
+	cat > "$sb/bin/postmap" <<-'EOF'
+	#!/usr/bin/env bash
+	echo "$@" >> "$(dirname "$0")/../postmap.log"
+	EOF
+	chmod +x "$sb/spf/despf.sh" "$sb/bin/postmap"
+
+	cat > "$sb/postwhite.conf" <<-EOF
+	spftoolspath=$sb/spf
+	postfixpath=$sb/out
+	postfixbinarypath=$sb/bin
+	allowlist=allow.cidr
+	denylist=deny.cidr
+	yahoo_static_hosts=$sb/yahoo.txt
+	custom_hosts=""
+	include_yahoo="no"
+	enable_denylist=no
+	denylist_hosts=""
+	reload_postfix=no
+	EOF
+}
+
+# use <tool-name> <path>: put a summarizer on the sandbox PATH
+use() {
+	ln -s "$2" "$sb/bin/$1"
+}
+
+# conf <line>: append a config option, overriding the defaults above
+conf() {
+	echo "$1" >> "$sb/postwhite.conf"
+}
+
+# run_script <script> [args]: run with only the sandbox on PATH
+run_script() {
+	local script=$1
+	shift
+	(cd "$sb" && env -i PATH="$sb/bin" HOME="$sb" \
+		bash "$repo/$script" "$@") > "$sb/stdout" 2>&1
+	status=$?
+}
+
+run_postwhite() {
+	run_script postwhite "$sb/postwhite.conf"
+}
+
+# rules <file>: the table without its generated header comments
+rules() {
+	grep -v '^#' "$1"
+}
+
+fail() {
+	echo "  $*"
+	ok=0
+}
+
+assert_status() {
+	[ "$status" -eq "$1" ] || fail "exit status $status, expected $1"
+}
+
+assert_output() {
+	grep -qF -- "$1" "$sb/stdout" || fail "output lacks: $1"
+}
+
+# assert_rules <file> <expected>: compare a table's rules
+assert_rules() {
+	local got
+	got=$(rules "$1" 2>/dev/null)
+	if [ "$got" != "$2" ]; then
+		fail "rules in $(basename "$1") differ:"
+		diff <(echo "$2") <(echo "$got") | sed 's/^/    /'
+	fi
+}
+
+skip() {
+	skip_reason=$1
+}
+
+# needs <var>...: skip unless each named summarizer path is set
+needs() {
+	for v in "$@"; do
+		if [ -z "${!v}" ]; then
+			skip "${v} not found"
+		fi
+	done
+}
+
+test_case() {
+	local name=$1
+	# shellcheck disable=SC2053 # the pattern is a glob
+	if [ -n "$pattern" ] && [[ $name != $pattern ]]; then
+		return
+	fi
+	ok=1
+	skip_reason=
+	"$name"
+	if [ -n "$skip_reason" ]; then
+		if [ -n "${REQUIRE_TOOLS:-}" ]; then
+			echo "FAIL $name: $skip_reason (REQUIRE_TOOLS is set)"
+			failed=$((failed + 1))
+		else
+			echo "skip $name: $skip_reason"
+			skipped=$((skipped + 1))
+		fi
+	elif [ "$ok" -eq 1 ]; then
+		echo "ok   $name"
+		passed=$((passed + 1))
+	else
+		echo "FAIL $name"
+		echo "  --- output:"
+		sed 's/^/  | /' "$sb/stdout"
+		failed=$((failed + 1))
+	fi
+}
+
+# mailer fixtures: adjacent prefixes merge, /32 hosts print bare, invalid
+# entries are dropped, and duplicates across hosts collapse
+mailers() {
+	printf '%s\n' ip4:192.0.2.0/25 ip4:192.0.2.128/25 ip4:198.51.100.7/32 \
+		ip4:300.1.1.1 ip6:2001:db8::/33 ip6:2001:db8:8000::/33 \
+		> "$sb/hosts/google.com"
+	printf '%s\n' ip4:198.51.100.7 ip4:203.0.113.0/24 > "$sb/hosts/example.org"
+	conf 'custom_hosts="example.org"'
+}
+
+expected_allow=$(printf '%s\tpermit\n' 192.0.2.0/24 198.51.100.7 \
+	203.0.113.0/24 2001:db8::/32)
+
+# --- tool selection
+
+prefers_aggregate_cidr() {
+	needs rust perl_tool
+	[ -n "$skip_reason" ] && return
+	sandbox
+	use aggregate-cidr "$rust"
+	use aggregateCIDR.pl "$perl_tool"
+	run_postwhite
+	assert_status 0
+	assert_output "summarization using $sb/bin/aggregate-cidr..."
+}
+test_case prefers_aggregate_cidr
+
+falls_back_to_perl() {
+	needs perl_tool
+	[ -n "$skip_reason" ] && return
+	sandbox
+	use aggregateCIDR.pl "$perl_tool"
+	run_postwhite
+	assert_status 0
+	assert_output "summarization using $sb/bin/aggregateCIDR.pl..."
+}
+test_case falls_back_to_perl
+
+no_summarizer_is_fatal() {
+	sandbox
+	run_postwhite
+	assert_status 1
+	assert_output "fatal: unable to locate aggregate-cidr or aggregateCIDR.pl"
+	[ ! -e "$sb/out/allow.cidr" ] || fail "allowlist written"
+}
+test_case no_summarizer_is_fatal
+
+# --- allowlist and denylist, with each summarizer
+
+allowlist_with() {
+	sandbox "${FUNCNAME[1]}"
+	use "$1" "$2"
+	mailers
+	run_postwhite
+	assert_status 0
+	assert_rules "$sb/out/allow.cidr" "$expected_allow"
+	assert_output "Writing 4 allowlist rules"
+	grep -qx '#     4 total rules\|# 4 total rules' "$sb/out/allow.cidr" ||
+		fail "rule count header missing"
+	[ "$(cat "$sb/postmap.log")" = "$sb/out/allow.cidr" ] ||
+		fail "postmap ran with: $(cat "$sb/postmap.log")"
+}
+
+allowlist_rust() {
+	needs rust
+	[ -n "$skip_reason" ] || allowlist_with aggregate-cidr "$rust"
+}
+test_case allowlist_rust
+
+allowlist_perl() {
+	needs perl_tool
+	[ -n "$skip_reason" ] || allowlist_with aggregateCIDR.pl "$perl_tool"
+}
+test_case allowlist_perl
+
+denylist_rust() {
+	needs rust
+	[ -n "$skip_reason" ] && return
+	sandbox
+	use aggregate-cidr "$rust"
+	mailers
+	printf '%s\n' ip4:233.252.0.0/25 ip4:233.252.0.128/25 > "$sb/hosts/spam.test"
+	conf 'enable_denylist=yes'
+	conf 'denylist_hosts="spam.test"'
+	run_postwhite
+	assert_status 0
+	assert_rules "$sb/out/allow.cidr" "$expected_allow"
+	assert_rules "$sb/out/deny.cidr" "$(printf '233.252.0.0/24\treject')"
+	grep -qx "$sb/out/deny.cidr" "$sb/postmap.log" || fail "postmap skipped denylist"
+}
+test_case denylist_rust
+
+# both summarizers give the same tables from the bundled Yahoo! list
+yahoo_parity() {
+	needs rust perl_tool
+	[ -n "$skip_reason" ] && return
+	local tool tables=()
+	for tool in aggregate-cidr aggregateCIDR.pl; do
+		sandbox "${FUNCNAME[0]}-$tool"
+		use "$tool" "$([ "$tool" = aggregate-cidr ] && echo "$rust" || echo "$perl_tool")"
+		cp "$repo/yahoo_static_hosts.txt" "$sb/yahoo.txt"
+		conf 'include_yahoo="yes"'
+		run_postwhite
+		assert_status 0
+		tables+=("$(rules "$sb/out/allow.cidr")")
+	done
+	[ "$(echo "${tables[0]}" | wc -l)" -gt 100 ] || fail "too few Yahoo! rules"
+	[ "${tables[0]}" = "${tables[1]}" ] || fail "allowlists differ between tools"
+}
+test_case yahoo_parity
+
+# a failing summarizer must not replace the tables with empty ones
+summarizer_failure_keeps_tables() {
+	sandbox
+	cat > "$sb/bin/aggregate-cidr" <<-'EOF'
+	#!/usr/bin/env bash
+	cat > /dev/null
+	echo "aggregate-cidr: read error" >&2
+	exit 1
+	EOF
+	chmod +x "$sb/bin/aggregate-cidr"
+	mailers
+	printf '# old\n192.0.2.1\tpermit\n' > "$sb/out/allow.cidr"
+	run_postwhite
+	[ "$status" -ne 0 ] || fail "exit status 0 after summarizer failed"
+	assert_rules "$sb/out/allow.cidr" "$(printf '192.0.2.1\tpermit')"
+	[ ! -e "$sb/postmap.log" ] || fail "postmap ran"
+}
+test_case summarizer_failure_keeps_tables
+
+# --- scrape_yahoo
+
+scrape_with() {
+	sandbox "${FUNCNAME[1]}"
+	use "$1" "$2"
+	cat > "$sb/bin/curl" <<-'EOF'
+	#!/usr/bin/env bash
+	echo '<td>192.0.2.0/25</td><td>192.0.2.128/25</td><td>198.51.100.0/24</td>'
+	EOF
+	chmod +x "$sb/bin/curl"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 0
+	[ "$(cat "$sb/yahoo.txt")" = "$(printf 'ip4:192.0.2.0/24\nip4:198.51.100.0/24')" ] ||
+		fail "yahoo list: $(cat "$sb/yahoo.txt")"
+}
+
+scrape_yahoo_rust() {
+	needs rust
+	[ -n "$skip_reason" ] || scrape_with aggregate-cidr "$rust"
+}
+test_case scrape_yahoo_rust
+
+scrape_yahoo_perl() {
+	needs perl_tool
+	[ -n "$skip_reason" ] || scrape_with aggregateCIDR.pl "$perl_tool"
+}
+test_case scrape_yahoo_perl
+
+scrape_yahoo_summarizer_failure() {
+	sandbox
+	cat > "$sb/bin/aggregate-cidr" <<-'EOF'
+	#!/usr/bin/env bash
+	cat > /dev/null
+	exit 1
+	EOF
+	cat > "$sb/bin/curl" <<-'EOF'
+	#!/usr/bin/env bash
+	echo '<td>192.0.2.0/25</td>'
+	EOF
+	chmod +x "$sb/bin/aggregate-cidr" "$sb/bin/curl"
+	echo 'ip4:192.0.2.1' > "$sb/yahoo.txt"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	[ "$status" -ne 0 ] || fail "exit status 0 after summarizer failed"
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.1 ] || fail "yahoo list changed"
+}
+test_case scrape_yahoo_summarizer_failure
+
+scrape_yahoo_no_summarizer() {
+	sandbox
+	echo 'ip4:192.0.2.1' > "$sb/yahoo.txt"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 1
+	assert_output "fatal: unable to locate aggregate-cidr or aggregateCIDR.pl"
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.1 ] || fail "yahoo list changed"
+}
+test_case scrape_yahoo_no_summarizer
+
+echo
+echo "$passed passed, $failed failed, $skipped skipped"
+[ "$failed" -eq 0 ]
