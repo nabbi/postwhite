@@ -21,6 +21,14 @@ yahoo_url="https://senders.yahooinc.com/outbound-mail-servers"
 # Abort script on error
 set -e
 
+# Postfix's host must be able to read the list; temp files stay private (mktemp)
+umask 022
+
+fatal() {
+	>&2 printf "fatal: %s\n" "$*"
+	exit 1
+}
+
 # summarize with the first tool found in the system path:
 #   aggregate-cidr     https://github.com/nabbi/route-summarization-rs
 #   aggregateCIDR.pl   https://github.com/nabbi/route-summarization
@@ -39,22 +47,61 @@ else
         config_file="/etc/postwhite.conf"
 fi
 
-# Read config file options   
-if [ -s "$config_file" ] ; then
-        printf "\nReading options from %s...\n" "$config_file"
-        . "${config_file}"
-else
+# Read config file options
+if [ ! -s "$config_file" ] ; then
         >&2 printf "%s: Can't find %s. Exiting.\n" "$0" "$config_file"
         exit 1
 fi
+if [ -n "$(find -L "$config_file" -prune -perm -0002 2>/dev/null)" ]; then
+        fatal "$config_file is world-writable"
+fi
+printf "\nReading options from %s...\n" "$config_file"
 
-# Check for wget or curl
-if [ `command -v wget` ]
+# Read key=value settings rather than sourcing the file, so the config can't
+# run commands or replace the script's own variables. Only the list's path is
+# used here; the rest are postwhite's and are skipped without a warning.
+yahoo_static_hosts=
+while IFS= read -r line || [ -n "$line" ]; do
+        # trim surrounding whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        case $line in
+                ''|'#'*) continue ;;
+                *=*) ;;
+                *) fatal "$config_file: not a setting: $line" ;;
+        esac
+        if [ "${line%%=*}" = yahoo_static_hosts ]; then
+                value="${line#*=}"
+                # drop one pair of surrounding quotes
+                case $value in
+                        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+                        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+                esac
+                yahoo_static_hosts="$value"
+        fi
+done < "$config_file"
+
+if [ -z "$yahoo_static_hosts" ]; then
+        fatal "yahoo_static_hosts is not set in $config_file"
+fi
+if [ -d "$yahoo_static_hosts" ]; then
+        fatal "yahoo_static_hosts $yahoo_static_hosts is a directory"
+fi
+
+# Check for curl or wget
+# Give up rather than hang cron on a stalled server, and follow redirects
+# only to https
+user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0"
+if [ -n "$(command -v curl)" ]
 then
-        content=$(wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0" $yahoo_url -q -O -)
-elif [ -n "$(command -v curl)" ]
+        content=$(curl -A "$user_agent" --max-time 120 --proto =https \
+                --proto-redir =https -fsL "$yahoo_url") ||
+                fatal "can't download $yahoo_url"
+elif [ -n "$(command -v wget)" ]
 then
-        content=$(curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0" -s -L $yahoo_url)
+        content=$(wget --user-agent="$user_agent" --timeout=60 --tries=2 \
+                --https-only -q -O - "$yahoo_url") ||
+                fatal "can't download $yahoo_url"
 else
         echo "wget or curl required.";
         exit 1;
@@ -65,7 +112,7 @@ fi
 cells=$(echo "$content" | perl -ne 'while (/<td[^>]*>([^<]+)<\/td>/g) { print "$1\n" }')
 
 # Scrape and format IPv4 addresses; a bare address is a single host
-ipv4_mailers=$(echo "$cells" | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(/[0-9]{1,3})?' | while read line; do echo "ip4:$line"; done)
+ipv4_mailers=$(echo "$cells" | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(/[0-9]{1,3})?' | while read -r line; do echo "ip4:$line"; done)
 
 # A changed page layout yields nothing; keep the current list rather than empty it
 if [ -z "$ipv4_mailers" ]; then
@@ -79,13 +126,19 @@ ipv4_cidrs=$(echo "$ipv4_mailers" | ${aggregateCIDR} --quiet --spf)
 
 # Scrape and format IPv6 addresses
 # The pattern matches loosely; the summarizer drops anything invalid
-ipv6_mailers=$(echo "$cells" | grep -E -o '(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))' | while read line; do echo "ipv6:$line"; done)
+ipv6_mailers=$(echo "$cells" | grep -E -o '(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))' | while read -r line; do echo "ipv6:$line"; done)
 
 ipv6_cidrs=$(echo "$ipv6_mailers" | ${aggregateCIDR} --quiet --spf)
 
-# Overwrite old Yahoo! mailer list with scraped IPv4 and IPv6 hosts
-echo "$ipv4_cidrs" > "$yahoo_static_hosts"
-[ -z "$ipv6_cidrs" ] || echo "$ipv6_cidrs" >> "$yahoo_static_hosts"
+# Replace the old Yahoo! mailer list with scraped IPv4 and IPv6 hosts by
+# renaming a complete copy over it, so postwhite never reads a partial list
+# and a symlink planted at its name is replaced, not followed
+newlist="$(mktemp "$(dirname "$yahoo_static_hosts")/.$(basename "$yahoo_static_hosts").XXXXXX")"
+trap 'rm -f "$newlist"' EXIT
+echo "$ipv4_cidrs" > "$newlist"
+[ -z "$ipv6_cidrs" ] || echo "$ipv6_cidrs" >> "$newlist"
+chmod 644 "$newlist"
+mv -f "$newlist" "$yahoo_static_hosts"
 
 printf '\nVerizon/AOL/Yahoo! outbound mailers updated.\n'
 

@@ -569,6 +569,90 @@ scrape_yahoo_no_summarizer() {
 }
 test_case scrape_yahoo_no_summarizer
 
+scrape_yahoo_config_is_not_code() {
+	sandbox
+	passthrough
+	fake_curl '<td>192.0.2.0/24</td>'
+	# shellcheck disable=SC2016 # expansions are for scrape_yahoo, not us
+	conf 'custom_hosts="$(touch pwned)"'
+	conf 'aggregateCIDR=false'
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 0
+	[ ! -e "$sb/pwned" ] || fail "config ran a command"
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.0/24 ] ||
+		fail "yahoo list: $(cat "$sb/yahoo.txt")"
+}
+test_case scrape_yahoo_config_is_not_code
+
+scrape_yahoo_world_writable_config_refused() {
+	sandbox
+	passthrough
+	fake_curl '<td>192.0.2.0/24</td>'
+	echo 'ip4:192.0.2.1' > "$sb/yahoo.txt"
+	chmod o+w "$sb/postwhite.conf"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 1
+	assert_output "is world-writable"
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.1 ] || fail "yahoo list changed"
+}
+test_case scrape_yahoo_world_writable_config_refused
+
+# a symlink planted at the list's name is replaced, never written through
+scrape_yahoo_symlink_not_followed() {
+	sandbox
+	passthrough
+	fake_curl '<td>192.0.2.0/24</td>'
+	echo precious > "$sb/victim"
+	ln -s "$sb/victim" "$sb/yahoo.txt"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 0
+	[ "$(cat "$sb/victim")" = precious ] || fail "wrote through the symlink"
+	[ -f "$sb/yahoo.txt" ] && [ ! -L "$sb/yahoo.txt" ] ||
+		fail "yahoo list is not a regular file"
+	[ -n "$(find "$sb/yahoo.txt" -perm 0644)" ] ||
+		fail "yahoo list mode: $(ls -l "$sb/yahoo.txt")"
+	[ -z "$(find "$sb" -maxdepth 1 -name '.yahoo.txt.*')" ] || fail "temp list left"
+}
+test_case scrape_yahoo_symlink_not_followed
+
+# a failed download is reported, and leaves the list alone
+scrape_yahoo_download_failure() {
+	sandbox
+	passthrough
+	printf '#!/usr/bin/env bash\nexit 22\n' > "$sb/bin/curl"
+	chmod +x "$sb/bin/curl"
+	echo 'ip4:192.0.2.1' > "$sb/yahoo.txt"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 1
+	assert_output "fatal: can't download"
+	[ "$(cat "$sb/yahoo.txt")" = ip4:192.0.2.1 ] || fail "yahoo list changed"
+}
+test_case scrape_yahoo_download_failure
+
+# the download, redirects included, stays on https and has a time limit
+scrape_yahoo_https_only() {
+	sandbox
+	passthrough
+	cat > "$sb/bin/curl" <<-EOF
+	#!/usr/bin/env bash
+	printf '%s\n' "\$@" > "$sb/curl.args"
+	echo '<td>192.0.2.0/24</td>'
+	EOF
+	chmod +x "$sb/bin/curl"
+	run_script scrape_yahoo "$sb/postwhite.conf"
+	assert_status 0
+	local args
+	args=$(tr '\n' ' ' < "$sb/curl.args")
+	case $args in
+		*"--proto =https --proto-redir =https"*"https://"*) ;;
+		*) fail "curl ran with: $args" ;;
+	esac
+	case $args in
+		*--max-time*) ;;
+		*) fail "no time limit: $args" ;;
+	esac
+}
+test_case scrape_yahoo_https_only
 
 echo
 echo "$passed passed, $failed failed, $skipped skipped"
