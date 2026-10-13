@@ -35,11 +35,11 @@ trap 'rm -rf "$scratch"' EXIT
 utils="bash env which mktemp basename dirname cut expr grep sed sort ps sleep \
 	cat uniq wc date rm perl tr head"
 
-# sandbox [name]: create $sb with bin/, spf/, hosts/ and out/, named after
-# the calling test by default
+# sandbox [name]: create $sb with bin/, spf/, hosts/, out/ and tmp/, named
+# after the calling test by default
 sandbox() {
 	sb="$scratch/${1:-${FUNCNAME[1]}}"
-	mkdir -p "$sb/bin" "$sb/spf" "$sb/hosts" "$sb/out"
+	mkdir -p "$sb/bin" "$sb/spf" "$sb/hosts" "$sb/out" "$sb/tmp"
 	for u in $utils; do
 		p=$(command -v "$u") && ln -s "$p" "$sb/bin/$u"
 	done
@@ -84,7 +84,7 @@ conf() {
 run_script() {
 	local script=$1
 	shift
-	(cd "$sb" && env -i PATH="$sb/bin" HOME="$sb" \
+	(cd "$sb" && env -i PATH="$sb/bin" HOME="$sb" TMPDIR="$sb/tmp" \
 		bash "$repo/$script" "$@") > "$sb/stdout" 2>&1
 	status=$?
 }
@@ -109,6 +109,10 @@ assert_status() {
 
 assert_output() {
 	grep -qF -- "$1" "$sb/stdout" || fail "output lacks: $1"
+}
+
+assert_no_temp_files() {
+	[ -z "$(ls -A "$sb/tmp")" ] || fail "temp files left: $(ls -A "$sb/tmp")"
 }
 
 # assert_rules <file> <expected>: compare a table's rules
@@ -223,6 +227,7 @@ allowlist_with() {
 		fail "rule count header missing"
 	[ "$(cat "$sb/postmap.log")" = "$sb/out/allow.cidr" ] ||
 		fail "postmap ran with: $(cat "$sb/postmap.log")"
+	assert_no_temp_files
 }
 
 allowlist_rust() {
@@ -251,6 +256,7 @@ denylist_rust() {
 	assert_rules "$sb/out/allow.cidr" "$expected_allow"
 	assert_rules "$sb/out/deny.cidr" "$(printf '233.252.0.0/24\treject')"
 	grep -qx "$sb/out/deny.cidr" "$sb/postmap.log" || fail "postmap skipped denylist"
+	assert_no_temp_files
 }
 test_case denylist_rust
 
@@ -289,6 +295,7 @@ summarizer_failure_keeps_tables() {
 	[ "$status" -ne 0 ] || fail "exit status 0 after summarizer failed"
 	assert_rules "$sb/out/allow.cidr" "$(printf '192.0.2.1\tpermit')"
 	[ ! -e "$sb/postmap.log" ] || fail "postmap ran"
+	assert_no_temp_files
 }
 test_case summarizer_failure_keeps_tables
 

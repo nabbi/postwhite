@@ -99,12 +99,24 @@ if [ x"$enable_denylist" = x"yes" ]; then
 	tmpPrefix="tmp denytmp"
 fi
 
+# Remove temp files, however the script exits
+cleanup() {
+	for p in $tmpPrefix; do
+		for i in 1 2 3 4 5; do
+			eval "t=\${${p}${i}:-}"
+			if [ -n "$t" ]; then
+				rm -f "$t"
+			fi
+		done
+	done
+}
+trap cleanup EXIT
+
 for p in $tmpPrefix; do
 	for i in 1 2 3 4 5; do
-		t="$(mktemp -q /tmp/"${tmpBase}".XXXXXX)"
+		t="$(mktemp -q "${TMPDIR:-/tmp}"/"${tmpBase}".XXXXXX)"
 		if [ $? -ne 0 ]; then
 			>&2 printf "%s: Can't create temp files, exiting...\n" "$0"
-			cleanup
 			exit 1
 		fi
 		eval ${p}${i}="$t"
@@ -341,23 +353,6 @@ if [ x"$enable_denylist" = x"yes" ] ; then
 	cat "${denytmp5}" >> "${postfixpath}"/"${denylist}"
 	${postmap} "${postfixpath}"/"${denylist}"
 fi
-
-# Remove temp files
-cleanup() {
-	test -e "${tmp1}" && rm "${tmp1}"
-	test -e "${tmp2}" && rm "${tmp2}"
-	test -e "${tmp3}" && rm "${tmp3}"
-	test -e "${tmp4}" && rm "${tmp4}"
-	test -e "${tmp5}" && rm "${tmp5}"
-	if [ x"$enable_denylist" = x"yes" ] ; then
-		test -e "${denytmp1}" && rm "${denytmp1}"
-		test -e "${denytmp2}" && rm "${denytmp2}"
-		test -e "${denytmp3}" && rm "${denytmp3}"
-		test -e "${denytmp4}" && rm "${denytmp4}"
-		test -e "${denytmp5}" && rm "${denytmp5}"
-	fi
-}
-cleanup
 
 # Reload Postfix to pick up changes in allowlist
 if [ x"$reload_postfix" = x"yes" ]; then
