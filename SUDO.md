@@ -1,6 +1,6 @@
 # non-root
 
-Postwhite can be ran without root, leveraging sudo for postfix reloads
+Postwhite can be run without root, leveraging sudo for postfix reloads
 
 
 ## setup
@@ -9,7 +9,7 @@ Create service account
 
 ```shell
 groupadd postwhite
-useradd -g postwhite
+useradd -g postwhite postwhite
 ```
 
 update postfixpath in postwhite.conf to reflect this new path
