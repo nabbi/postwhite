@@ -32,7 +32,7 @@ rm -rf "$scratch"
 mkdir -p "$scratch"
 trap 'rm -rf "$scratch"' EXIT
 
-utils="bash env which mktemp basename dirname cut expr grep sed sort ps sleep \
+utils="bash env which mktemp basename dirname cut expr grep sed sort sleep \
 	cat uniq wc date rm perl tr head"
 
 # sandbox [name]: create $sb with bin/, spf/, hosts/, out/ and tmp/, named
@@ -80,11 +80,12 @@ conf() {
 	echo "$1" >> "$sb/postwhite.conf"
 }
 
-# run_script <script> [args]: run with only the sandbox on PATH
+# run_script <script> [args]: run with only the sandbox on PATH, giving up
+# after a minute in case it hangs
 run_script() {
 	local script=$1
 	shift
-	(cd "$sb" && env -i PATH="$sb/bin" HOME="$sb" TMPDIR="$sb/tmp" \
+	(cd "$sb" && timeout 60 env -i PATH="$sb/bin" HOME="$sb" TMPDIR="$sb/tmp" \
 		bash "$repo/$script" "$@") > "$sb/stdout" 2>&1
 	status=$?
 }
@@ -278,6 +279,22 @@ yahoo_parity() {
 	[ "${tables[0]}" = "${tables[1]}" ] || fail "allowlists differ between tools"
 }
 test_case yahoo_parity
+
+# BusyBox ps ignores its PID argument and always succeeds, so waiting on it
+# for the summarizer to finish would never end
+busybox_ps() {
+	needs rust
+	[ -n "$skip_reason" ] && return
+	sandbox
+	use aggregate-cidr "$rust"
+	printf '#!/usr/bin/env bash\nexit 0\n' > "$sb/bin/ps"
+	chmod +x "$sb/bin/ps"
+	mailers
+	run_postwhite
+	assert_status 0
+	assert_rules "$sb/out/allow.cidr" "$expected_allow"
+}
+test_case busybox_ps
 
 # a failing summarizer must not replace the tables with empty ones
 summarizer_failure_keeps_tables() {
