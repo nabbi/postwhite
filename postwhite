@@ -285,10 +285,19 @@ printf "\nCIDR and Host summarization using %s...\n" "${aggregateCIDR}"
 # invalid hosts are also screened and removed
 sed '/\./s/\/32//g' "${tmp1}" | sort -u | ${aggregateCIDR} --quiet --spf > "${tmp2}" &
 show_dots "$!"
+# keep the current tables rather than replace them with empty ones
+if ! wait "$!" ; then
+	>&2 printf "fatal: %s failed\n" "${aggregateCIDR}"
+	exit 1
+fi
 
 if [ x"$enable_denylist" = x"yes" ] ; then
         cat "${denytmp1}" | sort -u | ${aggregateCIDR} --quiet --spf > "${denytmp2}" &
         show_dots "$!"
+        if ! wait "$!" ; then
+                >&2 printf "fatal: %s failed\n" "${aggregateCIDR}"
+                exit 1
+        fi
 fi
 
 #Format the lists
