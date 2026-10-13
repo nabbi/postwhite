@@ -365,7 +365,7 @@ table_symlink_not_followed() {
 	run_postwhite
 	assert_status 0
 	[ "$(cat "$sb/victim")" = precious ] || fail "wrote through the symlink"
-	[ -f "$sb/out/allow.cidr" ] && [ ! -L "$sb/out/allow.cidr" ] ||
+	{ [ -f "$sb/out/allow.cidr" ] && [ ! -L "$sb/out/allow.cidr" ]; } ||
 		fail "allowlist is not a regular file"
 	[ -n "$(find "$sb/out/allow.cidr" -perm 0644)" ] ||
 		fail "allowlist mode: $(ls -l "$sb/out/allow.cidr")"
@@ -621,7 +621,7 @@ scrape_yahoo_symlink_not_followed() {
 	run_script scrape_yahoo "$sb/postwhite.conf"
 	assert_status 0
 	[ "$(cat "$sb/victim")" = precious ] || fail "wrote through the symlink"
-	[ -f "$sb/yahoo.txt" ] && [ ! -L "$sb/yahoo.txt" ] ||
+	{ [ -f "$sb/yahoo.txt" ] && [ ! -L "$sb/yahoo.txt" ]; } ||
 		fail "yahoo list is not a regular file"
 	[ -n "$(find "$sb/yahoo.txt" -perm 0644)" ] ||
 		fail "yahoo list mode: $(ls -l "$sb/yahoo.txt")"
